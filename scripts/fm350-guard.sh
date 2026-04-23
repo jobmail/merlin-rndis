@@ -1,47 +1,94 @@
 #!/bin/sh
 
+. /jffs/scripts/fm350-lib.sh
+
 REBOOT_COUNTER_FILE="/jffs/fm350.reboot"
 MAX_ATTEMPTS=5
+DELAY_SECONDS_BEFORE_REBOOT=2
 
-log_message() {
-    local msg="$1"
-    logger -t "FM350" "$msg"
-    echo "$msg"
-}
-
-if ! nvram get wans_dualwan 2>/dev/null | grep -q "usb"; then
-    log_message "USB modem is not configured in Dual WAN settings. Exiting."
-    exit 1
-fi
-
-if [ -f "$REBOOT_COUNTER_FILE" ] && [ -s "$REBOOT_COUNTER_FILE" ]; then
-    N=$(cat "$REBOOT_COUNTER_FILE")
-
-    if ! echo "$N" | grep -qE '^[0-9]+$'; then
+read_counter() {
+    if [ -f "$REBOOT_COUNTER_FILE" ] && [ -s "$REBOOT_COUNTER_FILE" ]; then
+        N=$(cat "$REBOOT_COUNTER_FILE")
+        if ! echo "$N" | grep -qE '^[0-9]+$'; then
+            N=0
+        fi
+    else
         N=0
     fi
-else
-    N=0
-fi
+    echo "$N"
+}
 
-if [ "$N" -gt "$MAX_ATTEMPTS" ]; then
-    log_message "Reboot attempts limit ($MAX_ATTEMPTS) reached"
-    exit 0
-fi
+increment_counter() {
+    local current="$1"
+    local next=$((current + 1))
+    echo "$next" > "$REBOOT_COUNTER_FILE"
+    log_message "GUARD: counter incremented to $next"
+}
 
-N=$((N + 1))
-echo "$N" > "$REBOOT_COUNTER_FILE"
+do_reboot() {
+    log_message "GUARD: rebooting router now..."
+    sleep $DELAY_SECONDS_BEFORE_REBOOT
+    /sbin/reboot
+}
 
-WAIT_MINUTES=$((5 * N))
-WAIT_SECONDS=$((WAIT_MINUTES * 60))
+mode_delayed() {
+    local N=$(read_counter)
 
-log_message "Watchdog initialization: attempt #$N, wait $WAIT_MINUTES min"
+    if [ "$N" -ge "$MAX_ATTEMPTS" ]; then
+        log_message "GUARD: max attempts ($MAX_ATTEMPTS) reached"
+        exit 0
+    fi
 
-sleep $WAIT_SECONDS
+    increment_counter "$N"
+    N=$((N + 1))
 
-if [ -f "$REBOOT_COUNTER_FILE" ]; then
-    log_message "Watchdog initialization timeout $WAIT_MINUTES min expired"
-    reboot
-else
-    log_message "Reboot flag disappeared"
-fi
+    local wait_minutes=$((5 * N))
+    local wait_seconds=$((wait_minutes * 60))
+
+    log_message "GUARD: delayed mode, attempt #$N, waiting $wait_minutes min"
+
+    sleep $wait_seconds
+
+    if [ -f "$REBOOT_COUNTER_FILE" ]; then
+        log_message "GUARD: timeout expired, rebooting..."
+        do_reboot
+    else
+        log_message "GUARD: flag file disappeared, skipping reboot"
+    fi
+}
+
+mode_now() {
+    log_message "Guard: immediate reboot requested."
+
+    if ! nvram get wans_dualwan 2>/dev/null | grep -q "usb"; then
+        log_message "GUARD: USB modem not configured in Dual WAN"
+        exit 1
+    fi
+
+    local N=$(read_counter)
+    if [ "$N" -ge "$MAX_ATTEMPTS" ]; then
+        log_message "GUARD: max attempts ($MAX_ATTEMPTS) reached"
+        exit 0
+    fi
+
+    increment_counter "$N"
+    do_reboot
+}
+
+main() {
+    if ! nvram get wans_dualwan 2>/dev/null | grep -q "usb"; then
+        log_message "GUARD: USB modem not configured in Dual WAN"
+        exit 1
+    fi
+
+    case "${1:-delay}" in
+        now)
+            mode_now
+            ;;
+        delay|*)
+            mode_delayed
+            ;;
+    esac
+}
+
+main "$@"

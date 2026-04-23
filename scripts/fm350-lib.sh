@@ -82,7 +82,7 @@ read_at() {
     rm -f "$tmp_file"
 
     if [ -n "$response" ]; then
-        local first_line=$(echo "$response" | head -1 | tr -d '\r')
+        local first_line=$(echo "$response" | head -1 | tr -d '\r\t' | xargs)
         [ "$silent_mode" != "1" ] && log_message "  <- Response: $first_line"
     else
         [ "$silent_mode" != "1" ] && log_message "  <- Response: (empty)"
