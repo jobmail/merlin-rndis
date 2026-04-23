@@ -1,0 +1,4 @@
+logger -t "INIT_START" "Event: $1, Device: $2, Interface: $3"
+
+logger -t "FM350" "Set default nvram params"
+/jffs/scripts/set_nvram.sh init.nvram 1

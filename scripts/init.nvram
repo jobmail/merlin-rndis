@@ -1,0 +1,16 @@
+jffs2_scripts=1
+ttl_spoof_enable=1
+0:ccode=US
+1:ccode=US
+0:regrev=0
+1:regrev=0
+territory_code=US/01
+wl0_country_abbrev_override=US
+wl0_country_code=US
+wl0_country_rev=0
+wl0_reg_mode=h
+wl1_country_abbrev_override=US
+wl1_country_code=US
+wl1_country_rev=0
+wl1_reg_mode=h
+wl1_country_abbrev_override=US

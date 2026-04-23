@@ -1,0 +1,12 @@
+logger -t "DHCP_EVENT" "Event: $1, Device: $2, Interface: $3"
+
+if [ "$1" = "deconfig" ] && [ "$2" = "4" ]; then
+    pid=$(ps | grep "[u]dhcpc -i eth3" | awk '{print $1}')
+    if [ -n "$pid" ]; then
+        logger -t "FM350" "Terminating udhcpc for eth3 (PID: $pid)"
+        kill $pid
+	wait $pid
+    else
+        logger -t "FM350" "udhcpc for eth3 not running"
+    fi
+fi

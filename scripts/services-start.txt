@@ -1,0 +1,4 @@
+logger -t "SERVICES_START" "Event: $1, Device: $2, Interface: $3"
+
+logger -t "FM350" "Starting guard"
+/jffs/scripts/fm350-guard.sh

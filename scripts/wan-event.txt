@@ -1,0 +1,25 @@
+logger -t "wan-event" "WAN $1 event: $2, interface: $(nvram get wan${1}_ifname)"
+
+if [ "$1" = "0" ] && [ "$(nvram get wan0_ifname)" = "eth3" ]; then
+    case "$2" in
+        init)
+            logger -t "FM350" "WAN eth3 initializing..."
+            ;;
+        connecting)
+            logger -t "FM350" "WAN eth3 connecting, starting modem setup..."
+	    #killall fm350-connect.sh
+	    #sleep 1
+            /jffs/scripts/fm350-connect.sh &
+            ;;
+        connected)
+            #logger -t "FM350" "WAN eth3 connected successfully"
+            #/sbin/service restart_firewall 2>/dev/null &
+            ;;
+        disconnected)
+            logger -t "FM350" "WAN eth3 disconnected"
+            ;;
+        stopped)
+            logger -t "FM350" "WAN eth3 stopped"
+            ;;
+    esac
+fi

@@ -1,0 +1,5 @@
+logger -t "NAT_START" "Event: $1, Device: $2, Interface: $3"
+    
+if nvram get wans_dualwan 2>/dev/null | grep -q "usb" && [ "$(nvram get wan0_ifname)" = "eth3" ]; then
+/jffs/scripts/fm350-nat.sh
+fi
