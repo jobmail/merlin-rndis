@@ -35,11 +35,11 @@ check_modem_health() {
         log_message "WATCHDOG: Ping to 8.8.8.8 failed"
         ERROR_COUNT=$((ERROR_COUNT + 1))
     fi
-    if [ $ERROR_COUNT -ge 3 ]; then
+    if [ $ERROR_COUNT -ge 0 ]; then
         log_message "WATCHDOG: Health check failed with $ERROR_COUNT errors"
         return 1
     fi
-    log_message "WATCHDOG: Health check passed (errors: $ERROR_COUNT)"
+
     return 0
 }
 
