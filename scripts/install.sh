@@ -44,7 +44,8 @@ generate_header() {
 #  FM350 Connection Script Collection
 # ============================================
 #  Author:      $PROJECT_AUTHOR
-#  Install Date: $INSTALL_DATE
+#  Version:	1.0
+#  Date:	$INSTALL_DATE
 #  GitHub:      $PROJECT_GITHUB
 #  License:     $PROJECT_LICENSE
 #
