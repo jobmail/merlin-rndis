@@ -85,40 +85,6 @@ copy_sh_with_header() {
     log "  Copied and updated header for $(basename "$dst")"
 }
 
-install_event_file() {
-    local target="$1"
-    local source="$2"
-    local target_path="$SCRIPTS_DIR/$target"
-    local source_path="$INSTALL_DIR/$source"
-
-    if [ ! -f "$source_path" ]; then
-        log "WARNING: Source file $source_path not found, skipping $target"
-        return
-    fi
-
-    local content
-    content=$(awk 'NR==1 && /^#!/ {next} {print}' "$source_path")
-
-    local marked_content="# >>> FM350 INSTALLER >>>
-$content
-# <<< FM350 INSTALLER <<<"
-
-    if [ ! -f "$target_path" ]; then
-        log "Creating $target_path"
-        echo "#!/bin/sh" > "$target_path"
-        echo "" >> "$target_path"
-        echo "$marked_content" >> "$target_path"
-        chmod +x "$target_path"
-    else
-        log "Updating $target_path"
-        if grep -q "# >>> FM350 INSTALLER >>>" "$target_path"; then
-            sed -i '/# >>> FM350 INSTALLER >>>/,/# <<< FM350 INSTALLER <<</d' "$target_path"
-        fi
-        echo "" >> "$target_path"
-        echo "$marked_content" >> "$target_path"
-        chmod +x "$target_path"
-    fi
-}
 
 main_install() {
     log "Starting FM350 installation..."

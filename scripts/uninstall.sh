@@ -41,7 +41,9 @@ remove_event_block() {
 
     log "Processing $target_path"
 
-    sed -i '/# >>> FM350 INSTALLER >>>/,/# <<< FM350 INSTALLER <<</d' "$target_path"
+    local tmp_file="/tmp/uninstall_$$.tmp"
+    sed '/# >>> FM350 INSTALLER >>>/,/# <<< FM350 INSTALLER <<</d' "$target_path" > "$tmp_file"
+    mv "$tmp_file" "$target_path"
 
     local remaining
     remaining=$(grep -v '^#!/bin/sh' "$target_path" | grep -v '^[[:space:]]*$' | wc -l)
