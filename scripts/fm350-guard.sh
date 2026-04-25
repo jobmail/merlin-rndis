@@ -58,7 +58,7 @@ mode_delayed() {
 }
 
 mode_now() {
-    log_message "Guard: immediate reboot requested."
+    log_message "GUARD: immediate reboot requested"
 
     if ! nvram get wans_dualwan 2>/dev/null | grep -q "usb"; then
         log_message "GUARD: USB modem not configured in Dual WAN"
@@ -76,11 +76,6 @@ mode_now() {
 }
 
 main() {
-    if ! nvram get wans_dualwan 2>/dev/null | grep -q "usb"; then
-        log_message "GUARD: USB modem not configured in Dual WAN"
-        exit 1
-    fi
-
     case "${1:-delay}" in
         now)
             mode_now

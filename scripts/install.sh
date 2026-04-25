@@ -18,8 +18,10 @@ PROJECT_SH_FILES="
 fm350-connect.sh
 fm350-firewall.sh
 fm350-guard.sh
+fm350-watchdog.sh
 fm350-lib.sh
 fm350-nat.sh
+fm350-test.sh
 set_nvram.sh
 "
 
