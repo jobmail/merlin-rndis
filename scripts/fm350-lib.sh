@@ -111,7 +111,7 @@ send_at() {
     local silent_mode="${3:-0}"
 
     exec 3>/tmp/at_cmd_lock
-    if ! flock -x 3; then
+    if ! flock -x -w 10 3; then
         log_message "FATAL: Could not acquire AT lock within 10s"
         return 1
     fi
