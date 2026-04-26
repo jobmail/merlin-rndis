@@ -95,8 +95,9 @@ initialize_connection() {
     local ip_gw=$(echo "$ip_addr" | awk -F. '{print $1"."$2"."$3".1"}')
     local ip_mask="255.255.255.0"
 
-    local ip_dns1=$(echo "$response" | grep "+GTDNS:" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sed -n '1p')
-    local ip_dns2=$(echo "$response" | grep "+GTDNS:" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sed -n '2p')
+    local dns_list=$(echo "$response" | grep "+GTDNS:" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+    local ip_dns1=$(echo "$dns_list" | sed -n '1p')
+    local ip_dns2=$(echo "$dns_list" | sed -n '2p')
 
     [ -z "$ip_dns1" ] && ip_dns1="8.8.8.8"
     [ -z "$ip_dns2" ] && ip_dns2="8.8.4.4"
