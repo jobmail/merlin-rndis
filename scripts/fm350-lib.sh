@@ -219,12 +219,8 @@ check_modem_health() {
     [ ! -c "$MODEM_TTY" ] && { log_message "WATCHDOG: $MODEM_TTY is not a character device"; return 1; }
     if ! ip addr show "$WAN_IF" 2>/dev/null | grep -q "inet "; then
         log_message "WATCHDOG: Interface $WAN_IF has no IP address"
-        retrun 1
+        return 1
     fi
-#    if ! check_sim 1; then
-#        log_message "WATCHDOG: AT port check failed"
-#        #ERROR_COUNT=$((ERROR_COUNT + 1))
-#    fi
 
     local ping_failed=0
     for i in 1 2 3 4 5; do
@@ -256,8 +252,8 @@ reset_modem() {
     log_message "Attempting modem reset (AT+CFUN=1,1)..."
     
     if write_at "AT+CFUN=1,1" 5 1; then
-        log_message "AT+CFUN=1,1 sent, waiting for modem reboot"
-        sleep 30
+        log_message "AT+CFUN=1,1 sent, waiting for modem reboot ($MODEM_READY_TIMEOUT sec)..."
+        sleep $MODEM_READY_TIMEOUT
 
         #local usb_path=$(nvram get usb_modem_act_path)
         #if [ -n "$usb_path" ] && [ -f "/sys/bus/usb/devices/$usb_path/authorized" ]; then
@@ -282,15 +278,42 @@ reset_modem() {
 
 recover_connection() {
     log_message "WATCHDOG: Attempting to recover connection..."
-    if reset_modem; then
-        log_message "WATCHDOG: Modem reset successful, re-initializing..."
-        if /jffs/scripts/fm350-connect.sh; then
+
+    if [ -f "/tmp/fm350-connect.sh.lock" ]; then
+        local pid=$(cat /tmp/fm350-connect.sh.lock 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            log_message "WATCHDOG: fm350-connect.sh is already running (PID: $pid), waiting..."
             return 0
         fi
     fi
+
+    if reset_modem; then
+        log_message "WATCHDOG: Modem reset successful, re-initializing..."
+        if do_start fm350-connect.sh sync; then
+            return 0
+        fi
+    fi
+
     log_message "WATCHDOG: Recovery failed, scheduling delayed reboot via guard..."
-    /jffs/scripts/fm350-guard.sh now &
+    do_start fm350-guard.sh now
     return 1
+}
+
+do_start() {
+    local background=1
+    local script_name="${1:-$SCRIPT_NAME}"
+    
+    [ "$2" = "sync" ] && { background=0; shift; }
+    
+    local lock_file="/tmp/${script_name}.lock"
+
+    shift 2>/dev/null
+    if [ "$background" -eq 1 ]; then
+        /jffs/scripts/"$script_name" "$@" &
+        return 0
+    else
+        /jffs/scripts/"$script_name" "$@"
+    fi
 }
 
 acquire_lock() {

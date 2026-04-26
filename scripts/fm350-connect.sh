@@ -133,14 +133,15 @@ initialize_connection() {
     nvram set "wan${UNIT}_auxstate_t"=0
     nvram set "wan${UNIT}_sbstate_t"=0
     nvram set "wan${UNIT}_is_usb_modem_ready"=1
+    
     nvram commit
 
-    service restart_dnsmasq > /dev/null 2>&1
-    service restart_nat > /dev/null 2>&1
-    service restart_firewall > /dev/null 2>&1
+    #service restart_dnsmasq > /dev/null 2>&1
+    #service restart_nat > /dev/null 2>&1
+    #service restart_firewall > /dev/null 2>&1
 
-    #/jffs/scripts/fm350-nat.sh "$WAN_IF"
-    #/jffs/scripts/fm350-firewall.sh "$WAN_IF"
+    do_start fm350-nat.sh
+    do_start fm350-firewall.sh
 
     kill -SIGUSR2 $(cat /var/run/wanduck.pid)
     sleep 1
@@ -178,7 +179,7 @@ connect() {
 
     if ! wait_for_modem_ready "$MODEM_TTY"; then
         log_message "Modem not ready. Trying a reset..."
-        /jffs/scripts/fm350-watchdog.sh check &
+        do_start fm350-watchdog.sh check
         exit 1
     fi
 
@@ -216,7 +217,7 @@ connect() {
     log_message ""
     log_message "=== Checking SIM card ==="
     if ! check_sim; then
-        /jffs/scripts/fm350-watchdog.sh check &
+        do_start fm350-watchdog.sh check
         exit 1
     fi
     log_message "SIM card status: READY"
@@ -230,12 +231,12 @@ connect() {
     log_message "ICCID: $ccid"
 
     if initialize_connection; then
-        /jffs/scripts/fm350-watchdog.sh &
+        do_start fm350-watchdog.sh
+        exit 0
     else
-        /jffs/scripts/fm350-watchdog.sh check &
+        do_start fm350-watchdog.sh check
     fi
-
-    exit $?
+    exit 1
 }
 
 main() {
