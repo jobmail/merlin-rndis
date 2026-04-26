@@ -1,6 +1,3 @@
 logger -t "FIREWALL_START" "Event: $1, Device: $2, Interface: $3"
 
-
-if [ "$1" = "eth3" ] && nvram get wans_dualwan 2>/dev/null | grep -q "usb" && [ "$(nvram get wan0_ifname)" = "eth3" ]; then
-/jffs/scripts/fm350-firewall.sh
-fi
+[ "$(nvram get wans_dualwan)" = "usb none" ] || [ "$(nvram get wans_dualwan)" = "usb wan" ] && [ $(nvram get usb_modem_act_dev) = $3 ] && /jffs/scripts/fm350-firewall.sh

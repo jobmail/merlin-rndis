@@ -12,7 +12,7 @@ if [ ! -c "$MODEM_TTY" ]; then
 fi
 
 stty -F "$MODEM_TTY" raw -icanon -echo min 0 time 5 2>/dev/null
-echo "Serial port configured."
+echo "Serial port configured"
 
 print_response() {
     local description="$1"

@@ -1,9 +1,12 @@
 SCRIPT_NAME=$(basename "$0")
 MODEM_TTY="/dev/ttyUSB4"
-WAN_IF="eth3"
+WAN_IF=$(nvram get usb_modem_act_dev)
+WANS_DUALWAN=$(nvram get wans_dualwan)
 LOG_FILE="/tmp/fm350.log"
-APN="internet"
 GUARD_FILE="/jffs/fm350.reboot"
+
+APN="internet"
+PREFERRED_BANDS="20,6,3,0"
 
 MODEM_READY_TIMEOUT=30
 MODEM_RESET_TIMEOUT=60
@@ -108,23 +111,26 @@ send_at() {
     local silent_mode="${3:-0}"
 
     exec 3>/tmp/at_cmd_lock
-    if [ -n "$AT_LOCK" ]; then
-        flock -x 3
+    if ! flock -x 3; then
+        log_message "FATAL: Could not acquire AT lock within 10s"
+        return 1
     fi
+
+    nvram set fm350_busy=1
 
     if ! write_at "$cmd" 2 "$silent_mode"; then
         [ "$silent_mode" != "1" ] && log_message "  !! Write failed, aborting"
-
-        [ -n "$AT_LOCK" ] && flock -u 3
+        nvram set fm350_busy=0
+        flock -u 3
         exec 3>&-
-
         return 1
     fi
 
     read_at "$timeout_sec" "$silent_mode"
     local ret=$?
 
-    [ -n "$AT_LOCK" ] && flock -u 3
+    nvram set fm350_busy=0
+    flock -u 3
     exec 3>&-
 
     return $ret
@@ -208,57 +214,33 @@ wait_for_modem_ready() {
     return 1
 }
 
-find_modem_usb_path() {
-    local target_vid="${1:-0e8d}"
-    local target_pid="${2:-7127}"
+check_modem_health() {
+    [ ! -e "$MODEM_TTY" ] && { log_message "WATCHDOG: $MODEM_TTY does not exist"; return 1; }
+    [ ! -c "$MODEM_TTY" ] && { log_message "WATCHDOG: $MODEM_TTY is not a character device"; return 1; }
+    if ! ip addr show "$WAN_IF" 2>/dev/null | grep -q "inet "; then
+        log_message "WATCHDOG: Interface $WAN_IF has no IP address"
+        retrun 1
+    fi
+#    if ! check_sim 1; then
+#        log_message "WATCHDOG: AT port check failed"
+#        #ERROR_COUNT=$((ERROR_COUNT + 1))
+#    fi
 
-    for dev in /sys/bus/usb/devices/*; do
-        if [ -f "$dev/idVendor" ] && [ -f "$dev/idProduct" ]; then
-            vid=$(cat "$dev/idVendor" 2>/dev/null)
-            pid=$(cat "$dev/idProduct" 2>/dev/null)
-            if [ "$vid" = "$target_vid" ] && [ "$pid" = "$target_pid" ]; then
-                basename "$dev"
-                return 0
-            fi
-        fi
+    local ping_failed=0
+    for i in 1 2 3 4 5; do
+        ping -c 1 -W 3 8.8.8.8 > /dev/null 2>&1 && return 0
+        [ "$i" -lt 5 ] && sleep 1
     done
 
-    if [ -c "$MODEM_TTY" ]; then
-        local tty_path=$(readlink -f /sys/class/tty/$(basename $MODEM_TTY)/device 2>/dev/null)
-        if [ -n "$tty_path" ]; then
-            local usb_dev=$(echo "$tty_path" | grep -oE '[0-9]+-[0-9]+' | head -1)
-            if [ -n "$usb_dev" ]; then
-                echo "$usb_dev"
-                return 0
-            fi
-        fi
-    fi
-
+    log_message "WATCHDOG: Ping to 8.8.8.8 failed (5 attempts)"
     return 1
 }
 
-check_modem_health() {
-    local ERROR_COUNT=0
-    [ ! -e "$MODEM_TTY" ] && { log_message "WATCHDOG: $MODEM_TTY does not exist"; ERROR_COUNT=$((ERROR_COUNT + 1)); }
-    [ ! -c "$MODEM_TTY" ] && { log_message "WATCHDOG: $MODEM_TTY is not a character device"; ERROR_COUNT=$((ERROR_COUNT + 1)); }
-    if ! check_sim 1; then
-        log_message "WATCHDOG: AT port check failed"
-        #ERROR_COUNT=$((ERROR_COUNT + 1))
-    fi
-    if ! ip addr show "$WAN_IF" 2>/dev/null | grep -q "inet "; then
-        log_message "WATCHDOG: Interface $WAN_IF has no IP address"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-    fi
-    if ! ping -c 1 -W 5 8.8.8.8 > /dev/null 2>&1; then
-        log_message "WATCHDOG: Ping to 8.8.8.8 failed"
-        ERROR_COUNT=$((ERROR_COUNT + 1))
-    fi
-    if [ $ERROR_COUNT -ge 1 ]; then
-        log_message "WATCHDOG: Health check failed with $ERROR_COUNT errors"
-        return 1
-    fi
-
-    return 0
+stop_interface() {
+    log_message "Stopping network interface..."
+    ip route flush dev $WAN_IF 2>/dev/null
+    ifconfig $WAN_IF down 2>/dev/null
+    sleep 1
 }
 
 reset_modem() {
@@ -269,24 +251,25 @@ reset_modem() {
         return 1
     fi
 
-    log_message "Stopping network interface..."
-    ifconfig $WAN_IF down 2>/dev/null
-    ip route flush dev $WAN_IF 2>/dev/null
-    sleep 1
+    stop_interface
 
-    log_message "Sending AT+CFUN=1,1..."
-    if ! write_at "AT+CFUN=1,1" 5 1; then
-        local usb_path=$(find_modem_usb_path "0e8d" "7127")
-        if [ -n "$usb_path" ] && [ -f "/sys/bus/usb/devices/$usb_path/authorized" ]; then
-            log_message "Resetting USB device at $usb_path..."
-            echo 0 > "/sys/bus/usb/devices/$usb_path/authorized"
-            sleep 5
-            echo 1 > "/sys/bus/usb/devices/$usb_path/authorized"
-            log_message "  -> USB reset complete"
-            sleep 5
-        else
-            log_message "WARNING: Could not reset USB device (no authorized file found)"
-            return 1
+    log_message "Attempting modem reset (AT+CFUN=15)..."
+    if write_at "AT+CFUN=15" 5 1; then
+        log_message "AT+CFUN=15 sent, waiting for modem reboot ($MODEM_READY_TIMEOUT seconds)..."
+    else
+        log_message "AT+CFUN=15 failed, trying AT+CFUN=1,1..."
+        if ! write_at "AT+CFUN=1,1" 5 1; then
+            local usb_path=$(nvram get usb_modem_act_path)
+            if [ -n "$usb_path" ] && [ -f "/sys/bus/usb/devices/$usb_path/authorized" ]; then
+                log_message "Resetting USB device at $usb_path..."
+                echo 0 > "/sys/bus/usb/devices/$usb_path/authorized"
+                sleep 5
+                echo 1 > "/sys/bus/usb/devices/$usb_path/authorized"
+                log_message "  -> USB reset complete"
+            else
+                log_message "WARNING: Could not reset USB device (no authorized file found)"
+                return 1
+            fi
         fi
     fi
 
@@ -303,9 +286,10 @@ recover_connection() {
     log_message "WATCHDOG: Attempting to recover connection..."
     if reset_modem; then
         log_message "WATCHDOG: Modem reset successful, re-initializing..."
-        if /jffs/scripts/fm350-connect.sh; then
-            return 0
-        fi
+        return 0
+#        if /jffs/scripts/fm350-connect.sh; then
+#            return 0
+#        fi
     fi
     log_message "WATCHDOG: Recovery failed, scheduling delayed reboot via guard..."
     /jffs/scripts/fm350-guard.sh now &
@@ -337,10 +321,12 @@ release_lock() {
     rm -f "$lock_file"
 }
 
-if ! nvram get wans_dualwan 2>/dev/null | grep -q "usb"; then
+if ! echo "$WANS_DUALWAN" | grep -q "usb"; then
     log_message "USB modem not configured in Dual WAN"
-    exit 1
+    exit 0
 fi
+
+[ "$(nvram get usb_modem_act_type)" != "rndis" ] && exit 0
 
 acquire_lock "$SCRIPT_NAME"
 trap 'release_lock "$SCRIPT_NAME"' EXIT INT TERM

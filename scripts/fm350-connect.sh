@@ -2,10 +2,13 @@
 
 . /jffs/scripts/fm350-lib.sh
 
+UNIT="${1:-0}"
+
 initialize_connection() {
     log_message ""
     log_message "=== Initializing connection ==="
 
+    stop_interface
     send_at_silent "AT+CFUN=1" 5
     send_at_silent "AT+CGPIAF=1,0,0,0" 5
     send_at_silent "AT+CREG=0" 5
@@ -18,12 +21,11 @@ initialize_connection() {
     send_at_silent "AT+CGDCONT=0,\"IPV4V6\"" 5
     send_at_silent "AT+CGDCONT=1,\"IPV4V6\",\"$APN\"" 5
 
-    local preferredBands="20,6,3,0"
     if [ "$IS_FM350_GL_16" = "1" ]; then
-        preferredBands="4,3,2,0"
+        PREFERRED_BANDS="4,3,2,0"
     fi
-    log_message "Setting preferred bands: $preferredBands"
-    response=$(send_at "AT+GTACT=$preferredBands" 3)
+    log_message "Setting preferred bands: $PREFERRED_BANDS"
+    response=$(send_at "AT+GTACT=$PREFERRED_BANDS" 5)
     if test_at_response_error "$response"; then
         log_message "ERROR: Failed to setup preferred bands"
         return 1
@@ -106,33 +108,44 @@ initialize_connection() {
     ifconfig "$WAN_IF" down 2>/dev/null
     ifconfig "$WAN_IF" up
     ifconfig "$WAN_IF" "$ip_addr" netmask "$ip_mask"
-    ip route del default 2>/dev/null
-    ip route add default via "$ip_gw" dev "$WAN_IF"
 
-    echo "nameserver $ip_dns1" > /tmp/resolv.conf
-    echo "nameserver $ip_dns2" >> /tmp/resolv.conf
-    echo "server=$ip_dns1" > /tmp/resolv.dnsmasq
-    echo "server=$ip_dns2" >> /tmp/resolv.dnsmasq
+    case "$WANS_DUALWAN" in
+    "usb none"|"usb wan")
+        ip route del default 2>/dev/null
+        ip route add default via "$ip_gw" dev "$WAN_IF"
+        log_message "Default route set via $WAN_IF gw $ip_gw"
+        ;;
+    "wan usb")
+        # USB — резервный, сохраняем для failback, но маршрут не трогаем
+        log_message "USB modem is backup WAN, skipping default route"
+        ;;
+    *)
+        log_message "Unknown wans_dualwan: $WANS_DUALWAN, skipping default route"
+        ;;
+    esac
+
+    nvram set "wan${UNIT}_ipaddr"="$ip_addr"
+    nvram set "wan${UNIT}_gateway"="$ip_gw"
+    nvram set "wan${UNIT}_dns"="$ip_dns1 $ip_dns2"
+    nvram set "link_wan${UNIT}"=1
+    nvram set "wan${UNIT}_state_t"=2
+    nvram set "wan${UNIT}_auxstate_t"=0
+    nvram set "wan${UNIT}_sbstate_t"=0
+    nvram set "wan${UNIT}_is_usb_modem_ready"=1
+    nvram commit
 
     service restart_dnsmasq > /dev/null 2>&1
+    service restart_nat > /dev/null 2>&1
+    service restart_firewall > /dev/null 2>&1
 
-    /jffs/scripts/fm350-nat.sh "$WAN_IF"
-    /jffs/scripts/fm350-firewall.sh "$WAN_IF"
+    #/jffs/scripts/fm350-nat.sh "$WAN_IF"
+    #/jffs/scripts/fm350-firewall.sh "$WAN_IF"
+
+    kill -SIGUSR2 $(cat /var/run/wanduck.pid)
+    sleep 1
 
     if ping -c 1 -W 3 8.8.8.8 > /dev/null 2>&1; then
         log_message "Internet is reachable!"
-
-        nvram set wan0_ifname="$WAN_IF"
-        nvram set wan_ifnames="$WAN_IF"
-        nvram set wan0_ipaddr="$ip_addr"
-        nvram set wan_ipaddr="$ip_addr"
-        nvram set wan0_dns="$ip_dns1 $ip_dns2"
-        nvram set wan_dns="$ip_dns1 $ip_dns2"
-        nvram set link_wan=1
-        nvram set wan0_state_t=2
-        nvram set wan_state_t=2
-        nvram set wan0_auxstate_t=0
-        nvram set wan0_sbstate_t=0
 
         local NTP_SERVER=$(nvram get ntp_server0)
         [ -z "$NTP_SERVER" ] && NTP_SERVER="pool.ntp.org"
@@ -152,13 +165,14 @@ initialize_connection() {
     else
         log_message "WARNING: Ping to 8.8.8.8 failed"
         log_message "ERROR: Connection initialization failed"
+        
         return 1
     fi
 }
 
 connect() {
     log_message "=========================================="
-    log_message "FM350 Connection Script v10"
+    log_message "FM350 Connection Script v1.0 (c) Refresh  "
     log_message "=========================================="
 
     if ! wait_for_modem_ready "$MODEM_TTY"; then
