@@ -124,6 +124,7 @@ initialize_connection() {
         ;;
     esac
 
+    nvram set "wan${UNIT}_proto=static"
     nvram set "wan${UNIT}_ipaddr"="$ip_addr"
     nvram set "wan${UNIT}_gateway"="$ip_gw"
     nvram set "wan${UNIT}_dns"="$ip_dns1 $ip_dns2"
@@ -172,18 +173,13 @@ initialize_connection() {
 
 connect() {
     log_message "=========================================="
-    log_message "FM350 Connection Script v1.0 (c) Refresh  "
+    log_message "FM350 Connection Script v1.0.0 (c) Refresh"
     log_message "=========================================="
 
     if ! wait_for_modem_ready "$MODEM_TTY"; then
         log_message "Modem not ready. Trying a reset..."
-        if [ -c "$MODEM_TTY" ]; then
-            reset_modem || exit 1
-        else
-            log_message "ERROR: $MODEM_TTY not found"
-            /jffs/scripts/fm350-watchdog.sh &
-            exit 1
-        fi
+        /jffs/scripts/fm350-watchdog.sh check &
+        exit 1
     fi
 
     stty -F "$MODEM_TTY" raw -icanon -echo min 0 time 5 2>/dev/null
@@ -220,7 +216,8 @@ connect() {
     log_message ""
     log_message "=== Checking SIM card ==="
     if ! check_sim; then
-        reset_modem || exit 1
+        /jffs/scripts/fm350-watchdog.sh check &
+        exit 1
     fi
     log_message "SIM card status: READY"
 
@@ -234,10 +231,11 @@ connect() {
 
     if initialize_connection; then
         /jffs/scripts/fm350-watchdog.sh &
-        exit 0
     else
-        reset_modem || exit 1
+        /jffs/scripts/fm350-watchdog.sh check &
     fi
+
+    exit $?
 }
 
 main() {

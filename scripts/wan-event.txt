@@ -10,7 +10,7 @@ if [ "$1" = "$unit" ] && [ "$dev" = "$(nvram get wan${unit}_ifname)" ]; then
             ;;
         connecting)
             logger -t "FM350" "WAN $dev connecting, starting modem setup..."
-            /jffs/scripts/fm350-connect.sh "$1" &
+            /jffs/scripts/fm350-connect.sh "$1"
             ;;
         connected)
             logger -t "FM350" "WAN $dev connected successfully"

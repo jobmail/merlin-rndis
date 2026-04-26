@@ -143,6 +143,7 @@ main_install() {
         src="$INSTALL_DIR/$file"
         if [ -f "$src" ]; then
             dst="$SCRIPTS_DIR/$file"
+            killall -9 "$file" 2>/dev/null || true
             copy_sh_with_header "$src" "$dst"
         else
             log "  WARNING: $file not found in $INSTALL_DIR"

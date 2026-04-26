@@ -4,8 +4,12 @@ if [ "$1" = "deconfig" ] && [ "$2" = "4" ]; then
     pid=$(ps | grep "[u]dhcpc -i eth3" | awk '{print $1}')
     if [ -n "$pid" ]; then
         logger -t "FM350" "Terminating udhcpc for eth3 (PID: $pid)"
-        kill $pid
-	wait $pid
+        kill "$pid"
+        # Ждём завершения через цикл
+        while kill -0 "$pid" 2>/dev/null; do
+            usleep 100000
+        done
+        logger -t "FM350" "udhcpc terminated"
     else
         logger -t "FM350" "udhcpc for eth3 not running"
     fi

@@ -37,8 +37,8 @@ write_at() {
     local write_pid=$!
 
     local waited=0
-    while kill -0 $write_pid 2>/dev/null && [ $waited -lt $write_timeout ]; do
-        sleep 1
+    while kill -0 $write_pid 2>/dev/null && [ $waited -lt $((10 * write_timeout)) ]; do #[ $waited -lt $write_timeout ]; do
+        usleep 100000
         waited=$((waited + 1))
     done
 
@@ -64,7 +64,7 @@ read_at() {
     local waited=0
     local result=""
 
-    while [ $waited -lt $read_timeout ]; do
+    while [ $waited -lt $((10 * read_timeout)) ]; do #[ $waited -lt $read_timeout ]; do
         response=$(cat "$tmp_file" 2>/dev/null)
 
         if echo "$response" | grep -q "OK"; then
@@ -79,7 +79,7 @@ read_at() {
             break
         fi
 
-        sleep 1
+        usleep 100000
         waited=$((waited + 1))
     done
 
@@ -253,43 +253,40 @@ reset_modem() {
 
     stop_interface
 
-    log_message "Attempting modem reset (AT+CFUN=15)..."
-    if write_at "AT+CFUN=15" 5 1; then
-        log_message "AT+CFUN=15 sent, waiting for modem reboot ($MODEM_READY_TIMEOUT seconds)..."
-    else
-        log_message "AT+CFUN=15 failed, trying AT+CFUN=1,1..."
-        if ! write_at "AT+CFUN=1,1" 5 1; then
-            local usb_path=$(nvram get usb_modem_act_path)
-            if [ -n "$usb_path" ] && [ -f "/sys/bus/usb/devices/$usb_path/authorized" ]; then
-                log_message "Resetting USB device at $usb_path..."
-                echo 0 > "/sys/bus/usb/devices/$usb_path/authorized"
-                sleep 5
-                echo 1 > "/sys/bus/usb/devices/$usb_path/authorized"
-                log_message "  -> USB reset complete"
-            else
-                log_message "WARNING: Could not reset USB device (no authorized file found)"
-                return 1
-            fi
+    log_message "Attempting modem reset (AT+CFUN=1,1)..."
+    
+    if write_at "AT+CFUN=1,1" 5 1; then
+        log_message "AT+CFUN=1,1 sent, waiting for modem reboot"
+        sleep 30
+
+        #local usb_path=$(nvram get usb_modem_act_path)
+        #if [ -n "$usb_path" ] && [ -f "/sys/bus/usb/devices/$usb_path/authorized" ]; then
+        #    log_message "Resetting USB device at $usb_path..."
+        #    echo 0 > "/sys/bus/usb/devices/$usb_path/authorized"
+        #    sleep 5
+        #    echo 1 > "/sys/bus/usb/devices/$usb_path/authorized"
+        #    log_message "  -> USB reset complete"
+        #else
+        #    log_message "WARNING: Could not reset USB device"
+        #fi
+
+        if wait_for_modem_ready "$MODEM_TTY" "$MODEM_RESET_TIMEOUT"; then
+            log_message "Modem reset completed successfully"
+            return 0
         fi
     fi
 
-    if ! wait_for_modem_ready "$MODEM_TTY" "$MODEM_RESET_TIMEOUT"; then
-        log_message "ERROR: Modem not responding after reset"
-        return 1
-    fi
-
-    log_message "Modem reset completed successfully."
-    return 0
+    log_message "ERROR: Modem not responding"
+    return 1
 }
 
 recover_connection() {
     log_message "WATCHDOG: Attempting to recover connection..."
     if reset_modem; then
         log_message "WATCHDOG: Modem reset successful, re-initializing..."
-        return 0
-#        if /jffs/scripts/fm350-connect.sh; then
-#            return 0
-#        fi
+        if /jffs/scripts/fm350-connect.sh; then
+            return 0
+        fi
     fi
     log_message "WATCHDOG: Recovery failed, scheduling delayed reboot via guard..."
     /jffs/scripts/fm350-guard.sh now &

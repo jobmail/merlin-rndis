@@ -62,6 +62,7 @@ remove_project_files() {
     log "Removing project .sh files..."
     for file in $PROJECT_SH_FILES; do
         if [ -f "$SCRIPTS_DIR/$file" ]; then
+            killall -9 "$file" 2>/dev/null || true
             rm -f "$SCRIPTS_DIR/$file"
             log "  Removed $file"
         else
