@@ -111,7 +111,7 @@ send_at() {
     local silent_mode="${3:-0}"
 
     exec 3>/tmp/at_cmd_lock
-    if ! flock -x -w 10 3; then
+    if ! flock -x 3; then
         log_message "FATAL: Could not acquire AT lock within 10s"
         return 1
     fi
@@ -253,6 +253,13 @@ reset_modem() {
     
     if write_at "AT+CFUN=1,1" 5 1; then
         log_message "AT+CFUN=1,1 sent, waiting for modem reboot ($MODEM_READY_TIMEOUT sec)..."
+
+        #local usb_path=$(nvram get usb_modem_act_path)
+        #log_message "USB driver rebind..."
+        #echo "$usb_path" > /sys/bus/usb/drivers/usb/unbind 2>/dev/null
+        #sleep 3
+        #echo "$usb_path" > /sys/bus/usb/drivers/usb/bind 2>/dev/null
+
         sleep $MODEM_READY_TIMEOUT
 
         #local usb_path=$(nvram get usb_modem_act_path)
@@ -325,7 +332,7 @@ acquire_lock() {
         pid=$(cat "$lock_file" 2>/dev/null)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             log_message "Another instance of $script_name is already running (PID: $pid)"
-            exit 0
+            retun 0 # NOT ERROR!
         else
             log_message "Stale lock file found for $script_name (PID: $pid)"
             rm -f "$lock_file"
@@ -333,6 +340,7 @@ acquire_lock() {
     fi
 
     echo "$$" > "$lock_file"
+    return 0
 }
 
 release_lock() {

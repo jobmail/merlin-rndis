@@ -6,6 +6,9 @@ REBOOT_COUNTER_FILE="/jffs/fm350.reboot"
 MAX_ATTEMPTS=5
 DELAY_SECONDS_BEFORE_REBOOT=2
 
+trap '' SIGPIPE
+trap '' SIGHUP
+
 read_counter() {
     if [ -f "$REBOOT_COUNTER_FILE" ] && [ -s "$REBOOT_COUNTER_FILE" ]; then
         N=$(cat "$REBOOT_COUNTER_FILE")
@@ -29,6 +32,8 @@ do_reboot() {
     log_message "GUARD: rebooting router now..."
     sleep $DELAY_SECONDS_BEFORE_REBOOT
     /sbin/reboot
+    sleep 30
+    echo b > /proc/sysrq-trigger 2>/dev/null
 }
 
 mode_delayed() {

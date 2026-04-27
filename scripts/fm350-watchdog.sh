@@ -2,6 +2,9 @@
 
 . /jffs/scripts/fm350-lib.sh
 
+trap '' SIGPIPE
+trap '' SIGHUP
+
 if [ "$1" = "check" ]; then
     log_message "WATCHDOG: Immediate health check requested"
     if ! check_modem_health; then
