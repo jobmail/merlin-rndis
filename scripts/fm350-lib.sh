@@ -332,7 +332,7 @@ acquire_lock() {
         pid=$(cat "$lock_file" 2>/dev/null)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
             log_message "Another instance of $script_name is already running (PID: $pid)"
-            retun 0 # NOT ERROR!
+            exit 0 # NOT ERROR!
         else
             log_message "Stale lock file found for $script_name (PID: $pid)"
             rm -f "$lock_file"
