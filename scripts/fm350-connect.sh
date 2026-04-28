@@ -175,28 +175,47 @@ initialize_connection() {
 
     log_message ""
     log_message "=== Getting IP configuration ==="
-    response=$(send_at "AT+CGPADDR=1; +GTDNS=1" 10)
 
-    if test_at_response_error "$response"; then
-        log_message "ERROR: Failed to get IP configuration"
-        return 1
-    fi
+    local ip_addr=""
+    local ip_dns1=""
+    local ip_dns2=""
 
-    local ip_addr=$(echo "$response" | grep "+CGPADDR:" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    for attempt in 1 2 3; do
+        log_message "Getting IP configuration (attempt $attempt/3)..."
+        
+        response=$(send_at "AT+CGPADDR=1; +GTDNS=1" 10)
+
+        if test_at_response_error "$response"; then
+            log_message "  -> Failed to get IP configuration"
+            [ $attempt -lt 3 ] && sleep 3
+            continue
+        fi
+
+        local ip_full=$(echo "$response" | grep "+CGPADDR: 1," | cut -d'"' -f2)
+        if [ -n "$ip_full" ]; then
+            ip_addr=$(echo "$ip_full" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+            [ -z "$ip_addr" ] && ip_addr=$(echo "$ip_full" | awk '{print $1}')
+        fi
+
+        local dns_line=$(echo "$response" | grep "+GTDNS: 1,")
+        if [ -n "$dns_line" ]; then
+            ip_dns1=$(echo "$dns_line" | cut -d'"' -f2)
+            ip_dns2=$(echo "$dns_line" | cut -d'"' -f4)
+        fi
+
+        [ -n "$ip_addr" ] && break
+    done
+
     if [ -z "$ip_addr" ]; then
-        log_message "ERROR: Failed to extract IP address"
+        log_message "ERROR: Failed to extract IP address after 3 attempts"
         return 1
     fi
-
-    local ip_gw=$(echo "$ip_addr" | awk -F. '{print $1"."$2"."$3".1"}')
-    local ip_mask="255.255.255.0"
-
-    local dns_list=$(echo "$response" | grep "+GTDNS:" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
-    local ip_dns1=$(echo "$dns_list" | sed -n '1p')
-    local ip_dns2=$(echo "$dns_list" | sed -n '2p')
 
     [ -z "$ip_dns1" ] && ip_dns1="8.8.8.8"
     [ -z "$ip_dns2" ] && ip_dns2="8.8.4.4"
+
+    local ip_gw=$(echo "$ip_addr" | awk -F. '{print $1"."$2"."$3".1"}')
+    local ip_mask="255.255.255.0"
 
     log_message "IP Address: $ip_addr"
     log_message "Gateway: $ip_gw"
@@ -270,6 +289,28 @@ initialize_connection() {
 }
 
 connect() {
+    local current_type=$(nvram get usb_modem_act_type)
+    if [ "$current_type" != "rndis" ]; then
+        local modem_found=0
+        for device_path in /sys/bus/usb/devices/[0-9]*-*; do
+            [ -f "$device_path/idVendor" ] || continue
+            vid=$(cat "$device_path/idVendor" 2>/dev/null)
+            if [ "$vid" = "2cb7" ] || [ "$vid" = "0e8d" ]; then
+                modem_found=1
+                break
+            fi
+        done
+        
+        if [ "$modem_found" -eq 1 ]; then
+            log_message "Setting NVRAM variables..."
+            nvram set usb_modem_act_type=rndis
+            nvram commit
+            log_message "usb_modem_act_type set to rndis"
+        else
+            log_message "WARNING: Modem not found on USB bus, keeping usb_modem_act_type=$current_type"
+        fi
+    fi
+
     log_message "=========================================="
     log_message "FM350 Connection Script v1.0.0 (c) Refresh"
     log_message "=========================================="

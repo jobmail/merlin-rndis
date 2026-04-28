@@ -194,20 +194,29 @@ check_sim() {
 wait_for_modem_ready() {
     local tty="$1"
     local timeout="${2:-$MODEM_READY_TIMEOUT}"
+    local stable_time=10
     local waited=0
+    local stable=0
 
     log_message "Waiting for modem to become ready on $tty (timeout ${timeout}s)..."
 
     while [ $waited -lt $timeout ]; do
-        if [ ! -c "$tty" ]; then
-            sleep 2
-            waited=$((waited + 2))
-            continue
-        fi
-
-        if send_at_silent "AT" 3; then
-            log_message "Modem is ready and responding to AT commands"
-            return 0
+        if [ -c "$tty" ]; then
+            if [ $stable -ge $stable_time ]; then
+                if send_at_silent "AT" 5; then
+                    log_message "Modem is stable (up for ${stable}s)"
+                    return 0
+                else
+                    log_message "Modem stable for ${stable}s but AT failed, resetting"
+                    stable=0
+                fi
+            fi
+            stable=$((stable + 2))
+        else
+            if [ $stable -gt 0 ]; then
+                log_message "Modem vanished after ${stable}s, resetting stability counter"
+                stable=0
+            fi
         fi
 
         sleep 2
@@ -408,7 +417,7 @@ if ! echo "$WANS_DUALWAN" | grep -q "usb"; then
 fi
 
 case "$SCRIPT_NAME" in
-    fm350-guard.sh|fm350-watchdog.sh)
+    fm350-guard.sh|fm350-watchdog.sh|fm350-connect.sh)
         ;;
     *)
         mode=$(nvram get usb_modem_act_type)
