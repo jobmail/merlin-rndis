@@ -11,6 +11,10 @@ PREFERRED_BANDS="20,6,3,0"
 MODEM_READY_TIMEOUT=30
 MODEM_RESET_TIMEOUT=60
 
+trap '' SIGPIPE
+trap '' SIGHUP
+#trap 'log_message "$SCRIPT_NAME: Received signal, exiting"; exit 0' SIGINT SIGTERM
+
 stop_lock=`nvram get stop_atlock`
 if [ -n "$stop_lock" ] && [ "$stop_lock" -eq "1" ]; then
         AT_LOCK=""
@@ -201,13 +205,13 @@ wait_for_modem_ready() {
             continue
         fi
 
-        if send_at_silent "AT" 1; then
+        if send_at_silent "AT" 3; then
             log_message "Modem is ready and responding to AT commands"
             return 0
         fi
 
         sleep 2
-        waited=$((waited + 3))
+        waited=$((waited + 2))
     done
 
     log_message "ERROR: Modem did not respond to AT within ${timeout}s"
@@ -281,18 +285,22 @@ reset_modem() {
     
     stop_interface
     
-    if write_at "AT+CFUN=1,1" 5 1; then
-        log_message "AT+CFUN=1,1 sent, waiting for modem reboot..."
-        
-        sleep 5
+    if [ -c "$MODEM_TTY" ]; then   # ← добавить проверку
+        if write_at "AT+CFUN=1,1" 5 1; then
+            log_message "AT+CFUN=1,1 sent, waiting for modem reboot..."
 
-        if wait_for_modem_ready "$MODEM_TTY" "$MODEM_RESET_TIMEOUT"; then
-            log_message "Modem reset completed successfully"
-            return 0
+            sleep 15
+
+            if wait_for_modem_ready "$MODEM_TTY" "$MODEM_RESET_TIMEOUT"; then
+                log_message "Modem reset completed successfully"
+                return 0
+            fi
+            log_message "WARNING: Soft reset failed, trying USB reset..."
+        else
+            log_message "WARNING: Failed to send AT+CFUN=1,1, trying USB reset..."
         fi
-        log_message "WARNING: Soft reset failed, trying USB reset..."
     else
-        log_message "WARNING: Failed to send AT+CFUN=1,1, trying USB reset..."
+        log_message "WARNING: $MODEM_TTY does not exist, skipping soft reset..."
     fi
 
     log_message "Attempting USB modem reset..."
@@ -300,14 +308,15 @@ reset_modem() {
     local usb_path=$(nvram get usb_modem_act_path)
     if which usb_modeswitch > /dev/null 2>&1; then
         log_message "  -> Sending USB reset via usb_modeswitch..."
-        usb_modeswitch -R -v 0x2cb7 -p 0x0000 -Q
+        usb_modeswitch -R -v 0x0e8d -p 0x7127 -Q 2>/dev/null
+        usb_modeswitch -R -v 0x2cb7 -p 0x0000 -Q 2>/dev/null
     elif [ -n "$usb_path" ]; then
         log_message "  -> Trying driver unbind/bind..."
         echo "$usb_path" > /sys/bus/usb/drivers/usb/unbind 2>/dev/null
         sleep 5
         echo "$usb_path" > /sys/bus/usb/drivers/usb/bind 2>/dev/null
     else
-        local usb_dev=$(lsusb 2>/dev/null | grep -i "2cb7" | awk '{print $2,"/"$4}' | sed 's/://;s/ //')
+        local usb_dev=$(lsusb 2>/dev/null | grep -iE "(2cb7|0e8d).*7127" | awk '{print $2,"/"$4}' | sed 's/://;s/ //')
         if [ -n "$usb_dev" ] && [ -e "/sys/bus/usb/devices/$usb_dev/authorized" ]; then
             log_message "  -> Trying authorize reset..."
             echo 0 > "/sys/bus/usb/devices/$usb_dev/authorized" 2>/dev/null
@@ -398,7 +407,17 @@ if ! echo "$WANS_DUALWAN" | grep -q "usb"; then
     exit 0
 fi
 
-[ "$(nvram get usb_modem_act_type)" != "rndis" ] && exit 0
+case "$SCRIPT_NAME" in
+    fm350-guard.sh|fm350-watchdog.sh)
+        ;;
+    *)
+        mode=$(nvram get usb_modem_act_type)
+        if [ "$mode" != "rndis" ]; then
+            log_message "Modem is not in RNDIS mode (usb_modem_act_type=$mode), exiting"
+            exit 1
+        fi
+        ;;
+esac
 
 acquire_lock "$SCRIPT_NAME"
 trap 'release_lock "$SCRIPT_NAME"' EXIT INT TERM

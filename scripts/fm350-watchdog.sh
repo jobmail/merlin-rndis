@@ -2,9 +2,6 @@
 
 . /jffs/scripts/fm350-lib.sh
 
-trap '' SIGPIPE
-trap '' SIGHUP
-
 if [ "$1" = "check" ]; then
     log_message "WATCHDOG: Immediate health check requested"
     if ! check_modem_health; then
@@ -28,6 +25,6 @@ while true; do
         fi
     fi
     if ! check_modem_health; then
-        recover_connection || exit 1
+        recover_connection && sleep $MODEM_RESET_TIMEOUT || exit 1
     fi
 done
