@@ -1,0 +1,100 @@
+--- a/drivers/net/usb/rndis_host.c
++++ b/drivers/net/usb/rndis_host.c
+@@ -29,6 +29,10 @@
+  * favor of such non-proprietary alternatives as CDC Ethernet or the newer (and
+  * currently rare) "Ethernet Emulation Model" (EEM).
+  */
++
++// Add: TX timeout recovery and USB reset support
++static void rndis_tx_timeout(struct net_device *net);
++extern void usbnet_terminate_urbs(struct usbnet *dev);
+
+ /*
+  * RNDIS notifications from device: command completion; "reverse"
+@@ -193,12 +197,58 @@
+  * Call context is likely probe(), before interface name is known,
+  * which is why we won't try to use it in the diagnostics.
+  */
+ 
++/*
++ * Обработчик TX Timeout для RNDIS устройств.
++ * Планирует полный сброс линка через EVENT_LINK_RESET.
++ */
++static void rndis_tx_timeout(struct net_device *net)
++{
++	struct usbnet *dev = netdev_priv(net);
++
++	netdev_warn(net, "rndis: TX timeout, scheduling link reset\n");
++	usbnet_defer_kevent(dev, EVENT_LINK_RESET);
++}
++
++/*
++ * Сброс RNDIS линка при ошибках.
++ * Вызывается из keventd при установленном флаге EVENT_LINK_RESET.
++ */
++static int rndis_link_reset(struct usbnet *dev)
++{
++	struct net_device *net = dev->net;
++	int retval;
++
++	netdev_warn(net, "rndis: starting link reset...\n");
++
++	netif_carrier_off(net);
++
++	usbnet_terminate_urbs(dev);
++
++	netif_device_detach(net);
++	msleep(20);
++	netif_device_attach(net);
++
++	if (dev->driver_info->reset) {
++		retval = dev->driver_info->reset(dev);
++		if (retval < 0)
++			netdev_warn(net,
++				    "rndis: reset failed: %d\n", retval);
++	}
++
++	netif_carrier_on(net);
++	netif_wake_queue(net);
++
++	netdev_warn(net, "rndis: link reset complete\n");
++	return 0;
++}
++
+ /* same as usbnet_netdev_ops but MTU change not allowed */
+ static const struct net_device_ops rndis_netdev_ops = {
+ 	.ndo_open		= usbnet_open,
+ 	.ndo_stop		= usbnet_stop,
+ 	.ndo_start_xmit		= usbnet_start_xmit,
+-	.ndo_tx_timeout		= usbnet_tx_timeout,
++	.ndo_tx_timeout		= rndis_tx_timeout,
+ 	.ndo_set_mac_address 	= eth_mac_addr,
+ 	.ndo_validate_addr	= eth_validate_addr,
+ };
+@@ -488,6 +538,7 @@
+ 	.status =	rndis_status,
+ 	.rx_fixup =	rndis_rx_fixup,
+ 	.tx_fixup =	rndis_tx_fixup,
++	.link_reset =	rndis_link_reset,
+ };
+
+ static const struct driver_info	rndis_poll_status_info = {
+@@ -499,6 +550,7 @@
+ 	.status =	rndis_status,
+ 	.rx_fixup =	rndis_rx_fixup,
+ 	.tx_fixup =	rndis_tx_fixup,
++	.link_reset =	rndis_link_reset,
+ };
+
+ /*-------------------------------------------------------------------------*/
+
+--- a/drivers/net/usb/usbnet.c
++++ b/drivers/net/usb/usbnet.c
+@@ -577,6 +577,7 @@
+ 	dev->wait = NULL;
+ 	remove_wait_queue(&unlink_wakeup, &wait);
+ }
++EXPORT_SYMBOL_GPL(usbnet_terminate_urbs);
+
+ int usbnet_stop (struct net_device *net)
+ {

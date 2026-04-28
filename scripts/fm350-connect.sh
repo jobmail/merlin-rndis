@@ -4,22 +4,152 @@
 
 UNIT="${1:-0}"
 
+# 0. Живость UART (AT)
+# 1. Функциональный режим (CFUN)      ← ДОЛЖЕН БЫТЬ ДО SIM!
+# 2. SIM-карта (CPIN)
+# 3. Выбор оператора (COPS)
+# 4. Регистрация в сети (CEREG)
+# 5. APN (CGDCONT)
+# 6. Активация PDP (CGACT)
+
+#МОДЕМ ВКЛЮЧЁН
+#    │
+#    ▼
+#[0. AT отвечает?] ──НЕТ──▶ Ждать / Ошибка возврата 1
+#    │ ДА
+#    ▼
+#[1. CFUN=1?] ──НЕТ──▶ Установить CFUN=1, ждать 5с
+#    │ ДА
+#    ▼
+#[2. CPIN=READY?] ──НЕТ──▶ Ждать / PIN / Ошибка возврата 1
+#    │ ДА
+#    ▼
+#[3. COPS=0?] ──НЕТ──▶ COPS=2 → COPS=0 (сброс на авто)
+#    │ ДА
+#    ▼
+#[4. CEREG=1/5?] ──НЕТ──▶ Ждать (до 120с) / Ошибка
+#    │ ДА
+#    ▼
+#[5. APN правильный?] ──НЕТ──▶ Установить CGDCONT=1
+#    │ ДА
+#    ▼
+#[6. CGACT=1?] ──НЕТ──▶ CGACT=1,1
+#    │ ДА
+#    ▼
+#ГОТОВО: поднимать QMI/MBIM
+
+wait_for_registration() {
+    local max_attempts=30
+    local attempt=0
+    
+    log_message "Waiting for network registration..."
+    
+    # Быстрая проверка — может, модем уже зарегистрирован?
+    local cereg=$(send_at "AT+CEREG?" 3 | grep "+CEREG:" | cut -d, -f2 | xargs)
+    local cgreg=$(send_at "AT+CGREG?" 3 | grep "+CGREG:" | cut -d, -f2 | xargs)
+    
+    if [ "$cereg" = "1" ] || [ "$cereg" = "5" ] || [ "$cgreg" = "1" ] || [ "$cgreg" = "5" ]; then
+        log_message "  -> Already registered (CEREG=$cereg, CGREG=$cgreg)!"
+        return 0
+    fi
+    
+    sleep 3
+
+    while [ $attempt -lt $max_attempts ]; do
+        attempt=$((attempt + 1))
+        
+        cereg=$(send_at "AT+CEREG?" 3 | grep "+CEREG:" | cut -d, -f2 | xargs)
+        cgreg=$(send_at "AT+CGREG?" 3 | grep "+CGREG:" | cut -d, -f2 | xargs)
+        
+        if [ "$cereg" = "3" ] || [ "$cgreg" = "3" ]; then
+            log_message "ERROR: Registration DENIED (CEREG=$cereg, CGREG=$cgreg)"
+            return 1
+        fi
+        
+        if [ "$cereg" = "1" ] || [ "$cereg" = "5" ] || [ "$cgreg" = "1" ] || [ "$cgreg" = "5" ]; then
+            log_message "  -> Registered (CEREG=$cereg, CGREG=$cgreg, attempt $attempt)"
+            return 0
+        fi
+        
+        if [ $((attempt % 5)) -eq 0 ]; then
+            log_message "Still searching... (attempt $attempt/$max_attempts, CEREG=$cereg)"
+        fi
+        
+        sleep 2
+    done
+    
+    log_message "ERROR: Registration timeout after $((max_attempts * 2)) seconds"
+    return 1
+}
+
 initialize_connection() {
     log_message ""
     log_message "=== Initializing connection ==="
 
     stop_interface
-    send_at_silent "AT+CFUN=1" 5
-    send_at_silent "AT+CGPIAF=1,0,0,0" 5
-    send_at_silent "AT+CREG=0" 5
-    send_at_silent "AT+CGREG=0" 5
-    send_at_silent "AT+CEREG=0" 5
-    send_at_silent "AT+CGATT=0" 5
-    send_at_silent "AT+CGACT=0,1" 5
-    send_at_silent "AT+COPS=2" 5
-    send_at_silent "AT+COPS=3,0" 5
-    send_at_silent "AT+CGDCONT=0,\"IPV4V6\"" 5
-    send_at_silent "AT+CGDCONT=1,\"IPV4V6\",\"$APN\"" 5
+
+    log_message "Checking functional mode..."
+    local cfun=$(send_at "AT+CFUN?" 3 | grep "+CFUN:" | cut -d: -f2 | tr -d '  \r\n')
+    if [ "$cfun" != "1" ]; then
+        log_message "  -> CFUN=$cfun, setting full functionality (CFUN=1)..."
+        if ! send_at "AT+CFUN=1" 10; then
+            log_message "ERROR: Failed to set CFUN=1"
+            return 1
+        fi
+        log_message "  -> Waiting for modem to apply settings..."
+        sleep 5
+    else
+        log_message "  -> CFUN already 1 (full functionality)"
+    fi   
+    
+    log_message "Configuring URC and output formats..."
+    send_at_silent "AT+CGPIAF=1,0,0,0" 1
+    log_message "  -> IP format: standard decimal"
+    send_at_silent "AT+CREG=2" 1
+    send_at_silent "AT+CGREG=2" 1
+    send_at_silent "AT+CEREG=2" 1
+    log_message "  -> Registration URCs enabled with full info (+CREG/+CGREG/+CEREG=2)"
+    send_at_silent "AT+COPS=3,0" 1
+    log_message "  -> Operator name format: long alphanumeric"
+
+    log_message "Registering on network..."
+    local cops=$(send_at "AT+COPS?" 3 | grep "+COPS:" | cut -d: -f2 | cut -d, -f1 | tr -d '  \r\n')
+    if [ "$cops" = "0" ]; then
+        log_message "  -> COPS mode is AUTO"
+    else
+        log_message "  -> COPS mode is $cops, switching to AUTO"
+        for try in 1 2 3; do
+            response=$(send_at "AT+COPS=0" 5)
+            if ! test_at_response_error "$response"; then
+                log_message "  -> AUTO mode set (attempt $try)"
+                break
+            fi
+            log_message "  -> Attempt $try failed, retrying..."
+            sleep 2
+        done
+        if test_at_response_error "$response"; then
+            log_message "ERROR: Failed to set COPS=0 after 3 attempts"
+            return 1
+        fi
+    fi
+
+    log_message "Setting APN..."
+    if [ -z "$APN" ]; then
+        log_message "WARNING: APN not set, using default from modem"
+    else
+        local current_apn=$(send_at "AT+CGDCONT?" 3 | grep "+CGDCONT: 1," | cut -d'"' -f4)
+        if [ "$current_apn" = "$APN" ]; then
+            log_message "  -> APN already correct: $APN"
+        else
+            log_message "  -> APN mismatch: current='$current_apn', setting to '$APN'"
+            if ! send_at "AT+CGDCONT=1,\"IPV4V6\",\"$APN\"" 5; then
+                log_message "ERROR: Failed to set APN"
+                return 1
+            fi
+            log_message "  -> APN updated, PDP context will be re-created"
+            APN_CHANGED=1
+        fi
+    fi
 
     if [ "$IS_FM350_GL_16" = "1" ]; then
         PREFERRED_BANDS="4,3,2,0"
@@ -32,49 +162,49 @@ initialize_connection() {
     fi
     log_message "  -> Bands configured successfully"
 
-    sleep 3
+    wait_for_registration || return 1
 
-    log_message "Registering on network (COPS=0)..."
-    response=$(send_at "AT+COPS=0" 60)
-    if test_at_response_error "$response"; then
-        log_message "ERROR: Failed to register on the network"
-        return 1
-    fi
-
-    log_message "Waiting for packet network registration..."
-    local reg_ready=0
-    local attempts=30
-    while [ $attempts -gt 0 ]; do
-        response=$(send_at "AT+CGREG?" 5)
-        local cgreg_stat=$(echo "$response" | grep "+CGREG:" | cut -d, -f2 | xargs)
-        if [ "$cgreg_stat" = "1" ] || [ "$cgreg_stat" = "5" ]; then
-            reg_ready=1
-            log_message "  -> Packet network ready (CGREG: $cgreg_stat)"
-            break
+    cgatt=$(send_at "AT+CGATT?" 3 | grep "+CGATT:" | cut -d: -f2 | tr -d '  \r\n')
+    if [ -z "$cgatt" ]; then
+        log_message "WARNING: No response from AT+CGATT? (modem busy)"
+        log_message "  -> Proceeding with PDP activation anyway..."
+    elif [ "$cgatt" = "0" ]; then
+        log_message "GPRS not attached, attaching..."
+        if ! send_at "AT+CGATT=1" 10; then
+            log_message "WARNING: GPRS attach command failed"
         fi
-        sleep 2
-        attempts=$((attempts - 1))
-    done
-
-    if [ $reg_ready -eq 0 ]; then
-        log_message "ERROR: Packet network not ready after 60 seconds"
-        return 1
+    elif [ "$cgatt" = "1" ]; then
+        log_message "GPRS already attached"
     fi
 
-    send_at_silent "AT+CGATT=1" 5
+    cgact=$(send_at "AT+CGACT?" 3 | grep "+CGACT: 1," | cut -d, -f2 | tr -d '  \r\n')
+    if [ "$APN_CHANGED" = "1" ] && [ "$cgact" = "1" ]; then
+        log_message "APN changed, deactivating old PDP context..."
+        send_at "AT+CGACT=0,1" 5
+        cgact="0"
+    fi
 
-    response=$(send_at "AT+CGACT?" 5)
-    local pdp_status=$(echo "$response" | sed -n 's/.*+CGACT: \([0-9]\).*/\1/p' | head -1)
-    if [ "$pdp_status" = "1" ]; then
+    if [ "$cgact" = "1" ]; then
         log_message "PDP context already active, skipping activation"
     else
-        response=$(send_at "AT+CGACT=1,1" 10)
-        if test_at_response_error "$response"; then
-            log_message "ERROR: Failed to activate PDP context"
-            return 1
-        fi
-        log_message "  -> PDP context activated"
-        sleep 2
+        local pdp_retry=3
+        while [ $pdp_retry -gt 0 ]; do
+            log_message "Activating PDP context (attempt $((4 - pdp_retry))/3)..."
+            response=$(send_at "AT+CGACT=1,1" 15)
+            if ! test_at_response_error "$response"; then
+                log_message "  -> PDP context activated"
+                break
+            fi
+            
+            pdp_retry=$((pdp_retry - 1))
+            if [ $pdp_retry -gt 0 ]; then
+                log_message "  -> Activation failed, retrying in 3 seconds..."
+                sleep 3
+            else
+                log_message "ERROR: Failed to activate PDP context after 3 attempts"
+                return 1
+            fi
+        done
     fi
 
     log_message ""
@@ -193,7 +323,7 @@ connect() {
 
     log_message ""
     log_message "=== Getting modem information ==="
-    local response=$(send_at "AT+CGMI?; +FMM?; +GTPKGVER?; +CFSN?; +CGSN?" 15)
+    local response=$(send_at "AT+CGMI?; +FMM?; +GTPKGVER?; +CFSN?; +CGSN?" 5)
 
     local manufacturer=$(echo "$response" | grep "+CGMI:" | cut -d: -f2 | tr -d '"' | xargs)
     local model=$(echo "$response" | grep "+FMM:" | cut -d: -f2 | tr -d '"' | xargs)

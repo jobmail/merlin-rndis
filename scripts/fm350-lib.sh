@@ -201,8 +201,8 @@ wait_for_modem_ready() {
             continue
         fi
 
-        if check_sim 1; then
-            log_message "Modem is ready and responding to AT commands."
+        if send_at_silent "AT" 1; then
+            log_message "Modem is ready and responding to AT commands"
             return 0
         fi
 
@@ -210,7 +210,7 @@ wait_for_modem_ready() {
         waited=$((waited + 3))
     done
 
-    log_message "ERROR: Modem did not respond to AT within ${timeout}s."
+    log_message "ERROR: Modem did not respond to AT within ${timeout}s"
     return 1
 }
 
@@ -239,47 +239,91 @@ stop_interface() {
     sleep 1
 }
 
-reset_modem() {
-    log_message "Attempting full modem reset with USB reinitialization"
-
-    if [ ! -c "$MODEM_TTY" ]; then
-        log_message "ERROR: $MODEM_TTY is not a character device (modem detached or hung)"
-        return 1
+reset_usb_modem() {
+    log_message "Attempting USB modem reset..."
+    
+    # Метод 1: usb_modeswitch reset (основной, самый надёжный)
+    if which usb_modeswitch > /dev/null 2>&1; then
+        log_message "  -> Sending USB reset via usb_modeswitch..."
+        usb_modeswitch -R -v 0x2cb7 -p 0x0000 -Q
+        sleep 10
+        return 0
     fi
+    
+    # Метод 2: unbind/bind (запасной)
+    local usb_path=$(nvram get usb_modem_act_path)
+    if [ -n "$usb_path" ]; then
+        log_message "  -> Trying driver unbind/bind..."
+        echo "$usb_path" > /sys/bus/usb/drivers/usb/unbind 2>/dev/null
+        sleep 5
+        echo "$usb_path" > /sys/bus/usb/drivers/usb/bind 2>/dev/null
+        sleep 10
+        return 0
+    fi
+    
+    # Метод 3: authorized (последний шанс)
+    local usb_dev=$(lsusb 2>/dev/null | grep -i "2cb7" | awk '{print $2,"/"$4}' | sed 's/://;s/ //')
+    if [ -n "$usb_dev" ] && [ -e "/sys/bus/usb/devices/$usb_dev/authorized" ]; then
+        log_message "  -> Trying authorize reset..."
+        echo 0 > "/sys/bus/usb/devices/$usb_dev/authorized" 2>/dev/null
+        sleep 5
+        echo 1 > "/sys/bus/usb/devices/$usb_dev/authorized" 2>/dev/null
+        sleep 10
+        return 0
+    fi
+    
+    log_message "WARNING: No reset method available"
+    return 1
+}
 
-    stop_interface
-
+reset_modem() {
     log_message "Attempting modem reset (AT+CFUN=1,1)..."
     
+    stop_interface
+    
     if write_at "AT+CFUN=1,1" 5 1; then
-        log_message "AT+CFUN=1,1 sent, waiting for modem reboot ($MODEM_READY_TIMEOUT sec)..."
-
-        #local usb_path=$(nvram get usb_modem_act_path)
-        #log_message "USB driver rebind..."
-        #echo "$usb_path" > /sys/bus/usb/drivers/usb/unbind 2>/dev/null
-        #sleep 3
-        #echo "$usb_path" > /sys/bus/usb/drivers/usb/bind 2>/dev/null
-
-        sleep $MODEM_READY_TIMEOUT
-
-        #local usb_path=$(nvram get usb_modem_act_path)
-        #if [ -n "$usb_path" ] && [ -f "/sys/bus/usb/devices/$usb_path/authorized" ]; then
-        #    log_message "Resetting USB device at $usb_path..."
-        #    echo 0 > "/sys/bus/usb/devices/$usb_path/authorized"
-        #    sleep 5
-        #    echo 1 > "/sys/bus/usb/devices/$usb_path/authorized"
-        #    log_message "  -> USB reset complete"
-        #else
-        #    log_message "WARNING: Could not reset USB device"
-        #fi
+        log_message "AT+CFUN=1,1 sent, waiting for modem reboot..."
+        
+        sleep 5
 
         if wait_for_modem_ready "$MODEM_TTY" "$MODEM_RESET_TIMEOUT"; then
             log_message "Modem reset completed successfully"
             return 0
         fi
+        log_message "WARNING: Soft reset failed, trying USB reset..."
+    else
+        log_message "WARNING: Failed to send AT+CFUN=1,1, trying USB reset..."
     fi
 
-    log_message "ERROR: Modem not responding"
+    log_message "Attempting USB modem reset..."
+
+    local usb_path=$(nvram get usb_modem_act_path)
+    if which usb_modeswitch > /dev/null 2>&1; then
+        log_message "  -> Sending USB reset via usb_modeswitch..."
+        usb_modeswitch -R -v 0x2cb7 -p 0x0000 -Q
+    elif [ -n "$usb_path" ]; then
+        log_message "  -> Trying driver unbind/bind..."
+        echo "$usb_path" > /sys/bus/usb/drivers/usb/unbind 2>/dev/null
+        sleep 5
+        echo "$usb_path" > /sys/bus/usb/drivers/usb/bind 2>/dev/null
+    else
+        local usb_dev=$(lsusb 2>/dev/null | grep -i "2cb7" | awk '{print $2,"/"$4}' | sed 's/://;s/ //')
+        if [ -n "$usb_dev" ] && [ -e "/sys/bus/usb/devices/$usb_dev/authorized" ]; then
+            log_message "  -> Trying authorize reset..."
+            echo 0 > "/sys/bus/usb/devices/$usb_dev/authorized" 2>/dev/null
+            sleep 5
+            echo 1 > "/sys/bus/usb/devices/$usb_dev/authorized" 2>/dev/null
+        else
+            log_message "WARNING: No reset method available"
+        fi
+    fi
+
+    if wait_for_modem_ready "$MODEM_TTY" "$MODEM_RESET_TIMEOUT"; then
+        log_message "Modem reset completed successfully"
+        return 0
+    fi
+
+    log_message "ERROR: USB reset failed, modem not responding"
     return 1
 }
 
