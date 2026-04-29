@@ -262,7 +262,16 @@ initialize_connection() {
     kill -SIGUSR2 $(cat /var/run/wanduck.pid)
     sleep 1
 
-    if ping -c 1 -W 3 8.8.8.8 > /dev/null 2>&1; then
+    local ping_ok=0
+    for attempt in 1 2 3 4 5; do
+        if ping -c 1 -W 3 8.8.8.8 > /dev/null 2>&1; then
+            ping_ok=1
+            break
+        fi
+        [ $attempt -lt 3 ] && { log_message "Ping attempt $attempt failed, retrying in 3s..."; sleep 3; }
+    done
+
+    if [ "$ping_ok" -eq 1 ]; then
         log_message "Internet is reachable!"
 
         local NTP_SERVER=$(nvram get ntp_server0)

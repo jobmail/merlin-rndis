@@ -199,10 +199,13 @@ wait_for_modem_ready() {
     local stable=0
 
     log_message "Waiting for modem to become ready on $tty (timeout ${timeout}s)..."
-
+    dots=""
     while [ $waited -lt $timeout ]; do
         if [ -c "$tty" ]; then
+            printf "\r  -> Stable: [%-10s] %ds" "$dots" "$stable" >&2
+
             if [ $stable -ge $stable_time ]; then
+                echo "" >&2
                 if send_at_silent "AT" 5; then
                     log_message "Modem is stable (up for ${stable}s)"
                     return 0
@@ -211,18 +214,22 @@ wait_for_modem_ready() {
                     stable=0
                 fi
             fi
-            stable=$((stable + 2))
+            stable=$((stable + 1))
+            dots="${dots}."
         else
             if [ $stable -gt 0 ]; then
+                echo "" >&2
                 log_message "Modem vanished after ${stable}s, resetting stability counter"
                 stable=0
+                dots=""
             fi
         fi
 
-        sleep 2
-        waited=$((waited + 2))
+        sleep 1
+        waited=$((waited + 1))
     done
 
+    echo "" >&2
     log_message "ERROR: Modem did not respond to AT within ${timeout}s"
     return 1
 }
@@ -263,7 +270,6 @@ reset_usb_modem() {
         return 0
     fi
     
-    # Метод 2: unbind/bind (запасной)
     local usb_path=$(nvram get usb_modem_act_path)
     if [ -n "$usb_path" ]; then
         log_message "  -> Trying driver unbind/bind..."
@@ -274,7 +280,6 @@ reset_usb_modem() {
         return 0
     fi
     
-    # Метод 3: authorized (последний шанс)
     local usb_dev=$(lsusb 2>/dev/null | grep -i "2cb7" | awk '{print $2,"/"$4}' | sed 's/://;s/ //')
     if [ -n "$usb_dev" ] && [ -e "/sys/bus/usb/devices/$usb_dev/authorized" ]; then
         log_message "  -> Trying authorize reset..."
