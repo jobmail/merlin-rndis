@@ -303,7 +303,7 @@ reset_modem() {
         if write_at "AT+CFUN=1,1" 5 1; then
             log_message "AT+CFUN=1,1 sent, waiting for modem reboot..."
 
-            sleep 15
+            sleep 10
 
             if wait_for_modem_ready "$MODEM_TTY" "$MODEM_RESET_TIMEOUT"; then
                 log_message "Modem reset completed successfully"
@@ -318,34 +318,27 @@ reset_modem() {
     fi
 
     log_message "Attempting USB modem reset..."
-
     local usb_path=$(nvram get usb_modem_act_path)
-    if which usb_modeswitch > /dev/null 2>&1; then
-        log_message "  -> Sending USB reset via usb_modeswitch..."
-        usb_modeswitch -R -v 0x0e8d -p 0x7127 -Q 2>/dev/null
-        usb_modeswitch -R -v 0x2cb7 -p 0x0000 -Q 2>/dev/null
-    elif [ -n "$usb_path" ]; then
-        log_message "  -> Trying driver unbind/bind..."
+
+    if [ -n "$usb_path" ]; then
+        echo 0 > "/sys/bus/usb/devices/$usb_path/authorized" 2>/dev/null
         echo "$usb_path" > /sys/bus/usb/drivers/usb/unbind 2>/dev/null
-        sleep 5
+        sleep 10
         echo "$usb_path" > /sys/bus/usb/drivers/usb/bind 2>/dev/null
+        sleep 3
+        echo 1 > "/sys/bus/usb/devices/$usb_path/authorized" 2>/dev/null
     else
-        local usb_dev=$(lsusb 2>/dev/null | grep -iE "(2cb7|0e8d).*7127" | awk '{print $2,"/"$4}' | sed 's/://;s/ //')
-        if [ -n "$usb_dev" ] && [ -e "/sys/bus/usb/devices/$usb_dev/authorized" ]; then
-            log_message "  -> Trying authorize reset..."
-            echo 0 > "/sys/bus/usb/devices/$usb_dev/authorized" 2>/dev/null
-            sleep 5
-            echo 1 > "/sys/bus/usb/devices/$usb_dev/authorized" 2>/dev/null
-        else
-            log_message "WARNING: No reset method available"
-        fi
+        log_message "ERROR: modem not detected on USB bus"
+        return 1
     fi
 
+    sleep 10
+    
     if wait_for_modem_ready "$MODEM_TTY" "$MODEM_RESET_TIMEOUT"; then
         log_message "Modem reset completed successfully"
         return 0
     fi
-
+    
     log_message "ERROR: USB reset failed, modem not responding"
     return 1
 }
